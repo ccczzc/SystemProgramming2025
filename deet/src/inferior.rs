@@ -45,7 +45,7 @@ impl Inferior {
         }
         let child = cmd.spawn().ok()?;
 
-        let res = Inferior {child};
+        let res = Inferior { child };
 
         match res.wait(Some(WaitPidFlag::WUNTRACED)).ok()? {
             Status::Stopped(signal, rip) => {
@@ -54,14 +54,14 @@ impl Inferior {
                     return None;
                 }
                 println!("Check signal SIGTRAP succeed at address {:#x}!", rip);
-            },
+            }
             _other => {
                 println!("Other Status!");
                 return None;
-            },
+            }
         }
         println!("Check signal SIGTRAP succeed!");
-        
+
         Some(res)
     }
 
@@ -87,5 +87,15 @@ impl Inferior {
     pub fn cont(&self) -> Result<Status, nix::Error> {
         ptrace::cont(self.pid(), None)?;
         Ok(self.wait(None)?)
+    }
+
+    pub fn kill(&mut self) {
+        match self.child.kill() {
+            Ok(_) => {
+                self.wait(None).ok();
+                println!("Killing running inferior (pid {})", self.pid());
+            }
+            Err(e) => println!("Killing running inferior failed: {}", e),
+        }
     }
 }

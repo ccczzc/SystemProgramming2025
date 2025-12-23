@@ -32,26 +32,49 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
+                    if let Some(inferior) = self.inferior.as_mut() {
+                        inferior.kill();
+                        self.inferior = None;
+                    }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        let continue_res = self.inferior.as_mut().unwrap().cont();
-                        if continue_res.is_ok() {
-                            match continue_res.unwrap() {
-                                Status::Stopped(signal, rip) => println!("Child stopped at address {:#x} due to signal {:?}", rip, signal),
-                                Status::Exited(exit_code) => println!("Child exited (status {})", exit_code),
-                                Status::Signaled(signal) => println!("Child exited exited due to a signal {:?}", signal),
-                            }
-                        }
+                        self.continue_inferior();
                     } else {
                         println!("Error starting subprocess");
                     }
                 }
+                DebuggerCommand::Continue => {
+                    if self.inferior.is_none() {
+                        println!("No inferior process running");
+                        continue;
+                    }
+                    self.continue_inferior();
+                }
                 DebuggerCommand::Quit => {
+                    if let Some(inferior) = self.inferior.as_mut() {
+                        inferior.kill();
+                    }
                     return;
+                }
+            }
+        }
+    }
+
+    fn continue_inferior(&mut self) {
+        let continue_res = self.inferior.as_mut().unwrap().cont();
+        if continue_res.is_ok() {
+            match continue_res.unwrap() {
+                Status::Stopped(signal, rip) => println!(
+                    "Child stopped at address {:#x} due to signal {:?}",
+                    rip, signal
+                ),
+                Status::Exited(exit_code) => println!("Child exited (status {})", exit_code),
+                Status::Signaled(signal) => {
+                    println!("Child exited exited due to a signal {:?}", signal)
                 }
             }
         }
