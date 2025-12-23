@@ -98,10 +98,19 @@ impl Debugger {
         let continue_res = self.inferior.as_mut().unwrap().cont();
         if continue_res.is_ok() {
             match continue_res.unwrap() {
-                Status::Stopped(signal, rip) => println!(
-                    "Child stopped at address {:#x} due to signal {:?}",
-                    rip, signal
-                ),
+                Status::Stopped(signal, rip) => {
+                    println!("Child stopped (signal {:?})", signal);
+                    let debug_current_line = self.debug_data.get_line_from_addr(rip);
+                    let debug_current_func = self.debug_data.get_function_from_addr(rip);
+                    if debug_current_line.is_some() && debug_current_func.is_some() {
+                        let current_line = debug_current_line.unwrap();
+                        let current_func_name = debug_current_func.unwrap();
+                        println!(
+                            "Stopped at {} ({}:{})",
+                            current_func_name, current_line.file, current_line.number
+                        );
+                    }
+                }
                 Status::Exited(exit_code) => println!("Child exited (status {})", exit_code),
                 Status::Signaled(signal) => {
                     println!("Child exited exited due to a signal {:?}", signal)
