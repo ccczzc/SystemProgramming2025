@@ -94,22 +94,27 @@ impl Debugger {
                         println!("Backtrace failed: {}", bt_res.err().unwrap());
                     }
                 }
-                DebuggerCommand::BreakPoint(location) => {
-                    // if self.inferior.is_none() {
-                    //     println!("No inferior process running");
-                    //     continue;
-                    // }
-                    if !location.starts_with('*') {
-                        println!("Breakpoint location must start with '*'");
+                DebuggerCommand::BreakPoint(target) => {
+                    let mut addr_opt: Option<u64> = None;
+                    if target.starts_with('*') {
+                        let addr_str = &target[1..];
+                        addr_opt = parse_address(addr_str);
+                    } else if let Ok(line_num) = target.parse::<u64>() {
+                        if let Some(a) = self.debug_data.get_addr_for_line(None, line_num)
+                        {
+                            addr_opt = Some(a);
+                        }
+                    } else {
+                        if let Some(a) = self.debug_data.get_addr_for_function(None, &target) {
+                            addr_opt = Some(a);
+                        }
+                    }
+                    if addr_opt.is_none() {
+                        eprintln!("Could not resolve breakpoint target {}. ", target);
+                        eprintln!("Usage: {{b | break | breakpoint}} {{*raw address | line number | function name}}");
                         continue;
                     }
-                    let addr_str = &location[1..];
-                    let addr = parse_address(addr_str);
-                    if addr.is_none() {
-                        println!("Invalid breakpoint address: {}", addr_str);
-                        continue;
-                    }
-                    let addr = addr.unwrap();
+                    let addr = addr_opt.unwrap();
                     println!(
                         "Setting breakpoint {} at {:#x}",
                         self.breakpoints.len(),
