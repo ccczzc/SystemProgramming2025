@@ -1,4 +1,5 @@
 use crate::debugger_command::DebuggerCommand;
+use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -8,13 +9,27 @@ pub struct Debugger {
     history_path: String,
     readline: Editor<()>,
     inferior: Option<Inferior>,
+    debug_data: DwarfData,
 }
 
 impl Debugger {
     /// Initializes the debugger.
     pub fn new(target: &str) -> Debugger {
         // TODO (milestone 3): initialize the DwarfData
-
+        let debug_data = match DwarfData::from_file(target) {
+            Ok(val) => val,
+            Err(DwarfError::ErrorOpeningFile) => {
+                println!("Could not open file {}", target);
+                std::process::exit(1);
+            }
+            Err(DwarfError::DwarfFormatError(err)) => {
+                println!(
+                    "Could not load debugging symbols from {}: {:?}",
+                    target, err
+                );
+                std::process::exit(1);
+            }
+        };
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
         let mut readline = Editor::<()>::new();
         // Attempt to load history from ~/.deet_history if it exists
@@ -25,6 +40,7 @@ impl Debugger {
             history_path,
             readline,
             inferior: None,
+            debug_data,
         }
     }
 
@@ -53,6 +69,20 @@ impl Debugger {
                         continue;
                     }
                     self.continue_inferior();
+                }
+                DebuggerCommand::Backtrace => {
+                    if self.inferior.is_none() {
+                        println!("No inferior process running");
+                        continue;
+                    }
+                    let bt_res = self
+                        .inferior
+                        .as_ref()
+                        .unwrap()
+                        .print_backtrace(&self.debug_data);
+                    if bt_res.is_err() {
+                        println!("Backtrace failed: {}", bt_res.err().unwrap());
+                    }
                 }
                 DebuggerCommand::Quit => {
                     if let Some(inferior) = self.inferior.as_mut() {
