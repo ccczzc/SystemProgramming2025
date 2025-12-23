@@ -11,7 +11,7 @@ use std::process::Command;
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
     /// current instruction pointer that it is stopped at.
-    Stopped(signal::Signal, usize),
+    Stopped(signal::Signal, u64),
 
     /// Indicates inferior exited normally. Contains the exit status code.
     Exited(i32),
@@ -37,7 +37,7 @@ pub struct Inferior {
 impl Inferior {
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
-    pub fn new(target: &str, args: &Vec<String>) -> Option<Inferior> {
+    pub fn new(target: &str, args: &Vec<String>, breakpoints: &Vec<u64>) -> Option<Inferior> {
         // TODO: implement me!
         let mut cmd = Command::new(target);
         cmd.args(args);
@@ -46,8 +46,10 @@ impl Inferior {
         }
         let child = cmd.spawn().ok()?;
 
-        let res = Inferior { child };
-
+        let mut res = Inferior { child };
+        for bp in breakpoints {
+            res.set_breakpoint(*bp).ok()?;
+        }
         match res.wait(Some(WaitPidFlag::WUNTRACED)).ok()? {
             Status::Stopped(signal, rip) => {
                 if signal != Signal::SIGTRAP {
@@ -79,7 +81,7 @@ impl Inferior {
             WaitStatus::Signaled(_pid, signal, _core_dumped) => Status::Signaled(signal),
             WaitStatus::Stopped(_pid, signal) => {
                 let regs = ptrace::getregs(self.pid())?;
-                Status::Stopped(signal, regs.rip as usize)
+                Status::Stopped(signal, regs.rip)
             }
             other => panic!("waitpid returned unexpected status: {:?}", other),
         })
@@ -102,13 +104,13 @@ impl Inferior {
 
     pub fn print_backtrace(&self, debug_data: &DwarfData) -> Result<(), nix::Error> {
         let regs = ptrace::getregs(self.pid())?;
-        let mut instruction_ptr = regs.rip as usize;
-        let mut base_ptr = regs.rbp as usize;
+        let mut instruction_ptr = regs.rip;
+        let mut base_ptr = regs.rbp;
         loop {
             let debug_current_line = debug_data.get_line_from_addr(instruction_ptr);
             let debug_current_func = debug_data.get_function_from_addr(instruction_ptr);
             if debug_current_line.is_none() || debug_current_func.is_none() {
-                return Err(nix::Error::InvalidPath);
+                return Err(nix::Error::from(nix::errno::Errno::EINVAL));
             }
             let current_line = debug_current_line.unwrap();
             let current_func_name = debug_current_func.unwrap();
@@ -120,9 +122,36 @@ impl Inferior {
                 break;
             }
             let frame_top = base_ptr + 8;
-            instruction_ptr = ptrace::read(self.pid(), frame_top as ptrace::AddressType)? as usize;
-            base_ptr = ptrace::read(self.pid(), base_ptr as ptrace::AddressType)? as usize;
+            instruction_ptr = ptrace::read(self.pid(), frame_top as ptrace::AddressType)? as u64;
+            base_ptr = ptrace::read(self.pid(), base_ptr as ptrace::AddressType)? as u64;
         }
         Ok(())
     }
+
+    pub fn set_breakpoint(&mut self, addr: u64) -> Result<u8, nix::Error> {
+        self.write_byte(addr, 0xcc)
+    }
+
+    fn write_byte(&mut self, addr: u64, val: u8) -> Result<u8, nix::Error> {
+        let aligned_addr = align_addr_to_word(addr);
+        let byte_offset = addr - aligned_addr;
+        let word = ptrace::read(self.pid(), aligned_addr as ptrace::AddressType)? as u64;
+        let orig_byte = (word >> 8 * byte_offset) & 0xff;
+        let masked_word = word & !(0xff << 8 * byte_offset);
+        let updated_word = masked_word | ((val as u64) << 8 * byte_offset);
+        (unsafe {
+            ptrace::write(
+                self.pid(),
+                aligned_addr as ptrace::AddressType,
+                updated_word as *mut std::ffi::c_void,
+            )
+        })?;
+        Ok(orig_byte as u8)
+    }
+}
+
+use std::mem::size_of;
+
+fn align_addr_to_word(addr: u64) -> u64 {
+    addr & (-(size_of::<u64>() as i64) as u64)
 }

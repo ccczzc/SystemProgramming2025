@@ -30,7 +30,7 @@ impl From<gimli_wrapper::Error> for Error {
 impl DwarfData {
     pub fn from_file(path: &str) -> Result<DwarfData, Error> {
         let file = fs::File::open(path).or(Err(Error::ErrorOpeningFile))?;
-        let mmap = unsafe { memmap::Mmap::map(&file).or(Err(Error::ErrorOpeningFile))? };
+        let mmap = unsafe { memmap2::Mmap::map(&file).or(Err(Error::ErrorOpeningFile))? };
         let object = object::File::parse(&*mmap)
             .or_else(|e| Err(gimli_wrapper::Error::ObjectError(e.to_string())))?;
         let endian = if object.is_little_endian() {
@@ -52,7 +52,7 @@ impl DwarfData {
     }
 
     #[allow(dead_code)]
-    pub fn get_addr_for_line(&self, file: Option<&str>, line_number: usize) -> Option<usize> {
+    pub fn get_addr_for_line(&self, file: Option<&str>, line_number: u64) -> Option<u64> {
         let target_file = match file {
             Some(filename) => self.get_target_file(filename)?,
             None => self.files.get(0)?,
@@ -67,7 +67,7 @@ impl DwarfData {
     }
 
     #[allow(dead_code)]
-    pub fn get_addr_for_function(&self, file: Option<&str>, func_name: &str) -> Option<usize> {
+    pub fn get_addr_for_function(&self, file: Option<&str>, func_name: &str) -> Option<u64> {
         match file {
             Some(filename) => Some(
                 self.get_target_file(filename)?
@@ -88,10 +88,10 @@ impl DwarfData {
     }
 
     #[allow(dead_code)]
-    pub fn get_line_from_addr(&self, curr_addr: usize) -> Option<Line> {
+    pub fn get_line_from_addr(&self, curr_addr: u64) -> Option<Line> {
         let location = self
             .addr2line
-            .find_location(curr_addr.try_into().unwrap())
+            .find_location(curr_addr)
             .ok()??;
         Some(Line {
             file: location.file?.to_string(),
@@ -101,10 +101,10 @@ impl DwarfData {
     }
 
     #[allow(dead_code)]
-    pub fn get_function_from_addr(&self, curr_addr: usize) -> Option<String> {
+    pub fn get_function_from_addr(&self, curr_addr: u64) -> Option<String> {
         let frame = self
             .addr2line
-            .find_frames(curr_addr.try_into().unwrap())
+            .find_frames(curr_addr)
             .ok()?
             .next()
             .ok()??;
@@ -151,11 +151,11 @@ impl DwarfData {
 #[derive(Debug, Clone, Default)]
 pub struct Type {
     pub name: String,
-    pub size: usize,
+    pub size: u64,
 }
 
 impl Type {
-    pub fn new(name: String, size: usize) -> Self {
+    pub fn new(name: String, size: u64) -> Self {
         Type {
             name: name,
             size: size,
@@ -165,8 +165,8 @@ impl Type {
 
 #[derive(Clone)]
 pub enum Location {
-    Address(usize),
-    FramePointerOffset(isize),
+    Address(u64),
+    FramePointerOffset(i64),
 }
 
 impl fmt::Display for Location {
@@ -190,15 +190,15 @@ pub struct Variable {
     pub name: String,
     pub entity_type: Type,
     pub location: Location,
-    pub line_number: usize, // Line number in source file
+    pub line_number: u64, // Line number in source file
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct Function {
     pub name: String,
-    pub address: usize,
-    pub text_length: usize,
-    pub line_number: usize, // Line number in source file
+    pub address: u64,
+    pub text_length: u64,
+    pub line_number: u64, // Line number in source file
     pub variables: Vec<Variable>,
 }
 
@@ -213,8 +213,8 @@ pub struct File {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
     pub file: String,
-    pub number: usize,
-    pub address: usize,
+    pub number: u64,
+    pub address: u64,
 }
 
 impl fmt::Display for Line {

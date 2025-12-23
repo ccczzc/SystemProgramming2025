@@ -2,14 +2,16 @@ use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
+use rustyline::history::FileHistory;
 use rustyline::Editor;
 
 pub struct Debugger {
     target: String,
     history_path: String,
-    readline: Editor<()>,
+    readline: Editor<(), FileHistory>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
+    breakpoints: Vec<u64>,
 }
 
 impl Debugger {
@@ -30,8 +32,15 @@ impl Debugger {
                 std::process::exit(1);
             }
         };
+        debug_data.print();
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
-        let mut readline = Editor::<()>::new();
+        let mut readline = match Editor::<(), FileHistory>::new() {
+            Ok(editor) => editor,
+            Err(err) => {
+                println!("Failed to initialize readline editor: {}", err);
+                std::process::exit(1);
+            }
+        };
         // Attempt to load history from ~/.deet_history if it exists
         let _ = readline.load_history(&history_path);
 
@@ -41,6 +50,7 @@ impl Debugger {
             readline,
             inferior: None,
             debug_data,
+            breakpoints: Vec::new(),
         }
     }
 
@@ -52,7 +62,7 @@ impl Debugger {
                         inferior.kill();
                         self.inferior = None;
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
@@ -82,6 +92,30 @@ impl Debugger {
                         .print_backtrace(&self.debug_data);
                     if bt_res.is_err() {
                         println!("Backtrace failed: {}", bt_res.err().unwrap());
+                    }
+                }
+                DebuggerCommand::BreakPoint(location) => {
+                    // if self.inferior.is_none() {
+                    //     println!("No inferior process running");
+                    //     continue;
+                    // }
+                    assert!(location.starts_with('*'));
+                    let addr_str = &location[1..];
+                    let addr = parse_address(addr_str);
+                    if addr.is_none() {
+                        println!("Invalid breakpoint address: {}", addr_str);
+                        continue;
+                    }
+                    let addr = addr.unwrap();
+                    println!(
+                        "Setting breakpoint {} at {:#x}",
+                        self.breakpoints.len(),
+                        addr
+                    );
+                    if self.inferior.is_none() {
+                        self.breakpoints.push(addr);
+                    } else {
+                        self.inferior.as_mut().unwrap().set_breakpoint(addr).ok();
                     }
                 }
                 DebuggerCommand::Quit => {
@@ -142,7 +176,7 @@ impl Debugger {
                     if line.trim().len() == 0 {
                         continue;
                     }
-                    self.readline.add_history_entry(line.as_str());
+                    let _ = self.readline.add_history_entry(line.as_str());
                     if let Err(err) = self.readline.save_history(&self.history_path) {
                         println!(
                             "Warning: failed to save history file at {}: {}",
@@ -159,4 +193,13 @@ impl Debugger {
             }
         }
     }
+}
+
+fn parse_address(addr: &str) -> Option<u64> {
+    let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+        &addr[2..]
+    } else {
+        &addr
+    };
+    u64::from_str_radix(addr_without_0x, 16).ok()
 }
