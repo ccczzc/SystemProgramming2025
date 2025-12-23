@@ -4,6 +4,7 @@ use nix::sys::signal;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
 use std::process::Child;
 use std::process::Command;
@@ -29,9 +30,15 @@ fn child_traceme() -> Result<(), std::io::Error> {
         "ptrace TRACEME failed",
     )))
 }
+#[derive(Clone)]
+struct Breakpoint {
+    addr: u64,
+    orig_byte: u8,
+}
 
 pub struct Inferior {
     child: Child,
+    addr_to_breakpoints: HashMap<u64, Breakpoint>,
 }
 
 impl Inferior {
@@ -46,7 +53,10 @@ impl Inferior {
         }
         let child = cmd.spawn().ok()?;
 
-        let mut res = Inferior { child };
+        let mut res = Inferior {
+            child,
+            addr_to_breakpoints: HashMap::new(),
+        };
         for bp in breakpoints {
             res.set_breakpoint(*bp).ok()?;
         }
@@ -87,9 +97,26 @@ impl Inferior {
         })
     }
 
-    pub fn cont(&self) -> Result<Status, nix::Error> {
+    pub fn cont(&mut self) -> Result<Status, nix::Error> {
+        let regs = ptrace::getregs(self.pid())?;
+        let instruction_ptr = regs.rip - 1;
+        if let Some(breakpoint) = self.addr_to_breakpoints.get(&instruction_ptr) {
+            // Restore original byte at breakpoint
+            self.write_byte(instruction_ptr, breakpoint.orig_byte)?;
+            let mut new_regs = regs;
+            new_regs.rip = instruction_ptr;
+            ptrace::setregs(self.pid(), new_regs)?;
+            ptrace::step(self.pid(), None)?;
+            let status = self.wait(None)?;
+            if let Status::Stopped(signal, _) = status {
+                assert!(signal == Signal::SIGTRAP);
+            } else {
+                return Ok(status);
+            }
+            self.set_breakpoint(instruction_ptr)?;
+        }
         ptrace::cont(self.pid(), None)?;
-        Ok(self.wait(None)?)
+        self.wait(None)
     }
 
     pub fn kill(&mut self) {
@@ -129,7 +156,10 @@ impl Inferior {
     }
 
     pub fn set_breakpoint(&mut self, addr: u64) -> Result<u8, nix::Error> {
-        self.write_byte(addr, 0xcc)
+        let orig_byte = self.write_byte(addr, 0xcc)?;
+        self.addr_to_breakpoints
+            .insert(addr, Breakpoint { addr, orig_byte });
+        Ok(orig_byte)
     }
 
     fn write_byte(&mut self, addr: u64, val: u8) -> Result<u8, nix::Error> {

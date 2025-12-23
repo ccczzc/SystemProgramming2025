@@ -99,7 +99,10 @@ impl Debugger {
                     //     println!("No inferior process running");
                     //     continue;
                     // }
-                    assert!(location.starts_with('*'));
+                    if !location.starts_with('*') {
+                        println!("Breakpoint location must start with '*'");
+                        continue;
+                    }
                     let addr_str = &location[1..];
                     let addr = parse_address(addr_str);
                     if addr.is_none() {
@@ -112,9 +115,8 @@ impl Debugger {
                         self.breakpoints.len(),
                         addr
                     );
-                    if self.inferior.is_none() {
-                        self.breakpoints.push(addr);
-                    } else {
+                    self.breakpoints.push(addr);
+                    if self.inferior.is_some() {
                         self.inferior.as_mut().unwrap().set_breakpoint(addr).ok();
                     }
                 }
