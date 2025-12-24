@@ -39,6 +39,7 @@ struct Breakpoint {
 pub struct Inferior {
     child: Child,
     addr_to_breakpoints: HashMap<u64, Breakpoint>,
+    pending_signal: Option<signal::Signal>,
 }
 
 impl Inferior {
@@ -56,24 +57,24 @@ impl Inferior {
         let mut res = Inferior {
             child,
             addr_to_breakpoints: HashMap::new(),
+            pending_signal: None,
         };
         for bp in breakpoints {
             res.set_breakpoint(*bp).ok()?;
         }
         match res.wait(Some(WaitPidFlag::WUNTRACED)).ok()? {
-            Status::Stopped(signal, rip) => {
+            Status::Stopped(signal, _rip) => {
                 if signal != Signal::SIGTRAP {
-                    println!("WaitStatus::Stopped : Not signaled by SIGTRAP!");
+                    eprintln!("WaitStatus::Stopped : Not signaled by SIGTRAP!");
                     return None;
                 }
-                println!("Check signal SIGTRAP succeed at address {:#x}!", rip);
+                // println!("Check signal SIGTRAP succeed at address {:#x}!", rip);
             }
             _other => {
-                println!("Other Status!");
+                eprintln!("Other Status!");
                 return None;
             }
         }
-        println!("Check signal SIGTRAP succeed!");
 
         Some(res)
     }
@@ -85,8 +86,8 @@ impl Inferior {
 
     /// Calls waitpid on this inferior and returns a Status to indicate the state of the process
     /// after the waitpid call.
-    pub fn wait(&self, options: Option<WaitPidFlag>) -> Result<Status, nix::Error> {
-        Ok(match waitpid(self.pid(), options)? {
+    pub fn wait(&mut self, options: Option<WaitPidFlag>) -> Result<Status, nix::Error> {
+        let status = match waitpid(self.pid(), options)? {
             WaitStatus::Exited(_pid, exit_code) => Status::Exited(exit_code),
             WaitStatus::Signaled(_pid, signal, _core_dumped) => Status::Signaled(signal),
             WaitStatus::Stopped(_pid, signal) => {
@@ -94,7 +95,13 @@ impl Inferior {
                 Status::Stopped(signal, regs.rip)
             }
             other => panic!("waitpid returned unexpected status: {:?}", other),
-        })
+        };
+        match status {
+            Status::Stopped(sig, _) => self.pending_signal = Some(sig),
+            Status::Signaled(sig) => self.pending_signal = Some(sig),
+            _ => self.pending_signal = None,
+        }
+        Ok(status)
     }
 
     pub fn cont(&mut self) -> Result<Status, nix::Error> {
@@ -115,8 +122,40 @@ impl Inferior {
             }
             self.set_breakpoint(instruction_ptr)?;
         }
-        ptrace::cont(self.pid(), None)?;
+        let sig = match self.pending_signal {
+            Some(Signal::SIGTRAP) => None,
+            x => x,
+        };
+        ptrace::cont(self.pid(), sig)?;
         self.wait(None)
+    }
+
+    // step forward by one instruction
+    pub fn step(&mut self) -> Result<Status, nix::Error> {
+        let regs = ptrace::getregs(self.pid())?;
+        let instruction_ptr = regs.rip - 1;
+        if let Some(breakpoint) = self.addr_to_breakpoints.get(&instruction_ptr) {
+            // Restore original byte at breakpoint
+            self.write_byte(instruction_ptr, breakpoint.orig_byte)?;
+            let mut new_regs = regs;
+            new_regs.rip = instruction_ptr;
+            ptrace::setregs(self.pid(), new_regs)?;
+            ptrace::step(self.pid(), None)?;
+            let status = self.wait(None)?;
+            if let Status::Stopped(signal, _) = status {
+                assert!(signal == Signal::SIGTRAP);
+            } else {
+                return Ok(status);
+            }
+            self.set_breakpoint(instruction_ptr)?;
+        }
+        let sig = match self.pending_signal {
+            Some(Signal::SIGTRAP) => None,
+            x => x,
+        };
+        ptrace::step(self.pid(), sig)?;
+        let status = self.wait(None)?;
+        Ok(status)
     }
 
     pub fn kill(&mut self) {

@@ -1,6 +1,7 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
+use nix::sys::ptrace; // Add this import
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::Editor;
@@ -100,8 +101,7 @@ impl Debugger {
                         let addr_str = &target[1..];
                         addr_opt = parse_address(addr_str);
                     } else if let Ok(line_num) = target.parse::<u64>() {
-                        if let Some(a) = self.debug_data.get_addr_for_line(None, line_num)
-                        {
+                        if let Some(a) = self.debug_data.get_addr_for_line(None, line_num) {
                             addr_opt = Some(a);
                         }
                     } else {
@@ -131,6 +131,72 @@ impl Debugger {
                     }
                     return;
                 }
+                DebuggerCommand::Step(count) => {
+                    if self.inferior.is_none() {
+                        println!("No inferior process running");
+                        continue;
+                    }
+
+                    let mut status = Status::Exited(0); // Dummy initialization
+                    let mut error = None;
+
+                    // Create a scope to borrow self.inferior and self.debug_data
+                    {
+                        let inferior = self.inferior.as_mut().unwrap();
+                        let debug_data = &self.debug_data;
+
+                        // Loop 'count' times (for number of source lines)
+                        'outer: for _ in 0..count {
+                            let regs = ptrace::getregs(inferior.pid()).unwrap();
+                            let start_line = debug_data.get_line_from_addr(regs.rip);
+
+                            // Loop instructions until line changes
+                            loop {
+                                // Step one instruction using your Inferior::step method
+                                let step_res = inferior.step();
+                                match step_res {
+                                    Ok(s) => {
+                                        status = s;
+                                        match status {
+                                            Status::Stopped(signal, rip) => {
+                                                // If stopped by something other than SIGTRAP, stop stepping
+                                                if signal != nix::sys::signal::Signal::SIGTRAP {
+                                                    break 'outer;
+                                                }
+
+                                                let current_line =
+                                                    debug_data.get_line_from_addr(rip);
+
+                                                // Check if we moved to a new line
+                                                if start_line.is_some() && current_line.is_some() {
+                                                    let start = start_line.as_ref().unwrap();
+                                                    let current = current_line.as_ref().unwrap();
+                                                    if start.file != current.file
+                                                        || start.number != current.number
+                                                    {
+                                                        // println!("Line changed, stopping step");
+                                                        break; // Line changed!
+                                                    }
+                                                }
+                                            }
+                                            _ => break 'outer, // Exited or Signaled
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error = Some(e);
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(e) = error {
+                        eprintln!("Step failed: {}", e);
+                    } else {
+                        self.print_status(&status);
+                    }
+                }
             }
         }
     }
@@ -138,25 +204,7 @@ impl Debugger {
     fn continue_inferior(&mut self) {
         let continue_res = self.inferior.as_mut().unwrap().cont();
         if continue_res.is_ok() {
-            match continue_res.unwrap() {
-                Status::Stopped(signal, rip) => {
-                    println!("Child stopped (signal {:?})", signal);
-                    let debug_current_line = self.debug_data.get_line_from_addr(rip);
-                    let debug_current_func = self.debug_data.get_function_from_addr(rip);
-                    if debug_current_line.is_some() && debug_current_func.is_some() {
-                        let current_line = debug_current_line.unwrap();
-                        let current_func_name = debug_current_func.unwrap();
-                        println!(
-                            "Stopped at {} ({}:{})",
-                            current_func_name, current_line.file, current_line.number
-                        );
-                    }
-                }
-                Status::Exited(exit_code) => println!("Child exited (status {})", exit_code),
-                Status::Signaled(signal) => {
-                    println!("Child exited exited due to a signal {:?}", signal)
-                }
-            }
+            self.print_status(&continue_res.unwrap());
         }
     }
 
@@ -197,6 +245,39 @@ impl Debugger {
                         println!("Unrecognized command.");
                     }
                 }
+            }
+        }
+    }
+
+    fn print_status(&mut self, status: &Status) {
+        match status {
+            Status::Stopped(signal, rip) => {
+                println!("Child stopped (signal {:?})", signal);
+                let debug_current_line = self.debug_data.get_line_from_addr(*rip);
+                let debug_current_func = self.debug_data.get_function_from_addr(*rip);
+                if debug_current_line.is_some() || debug_current_func.is_some() {
+                    print!("Stopped at ");
+                    if debug_current_func.is_none() {
+                        print!("<unknown function> ");
+                    } else {
+                        let current_func_name = debug_current_func.unwrap();
+                        print!("{} ", current_func_name);
+                    }
+                    if debug_current_line.is_none() {
+                        println!("<unknown location>");
+                    } else {
+                        let current_line = debug_current_line.unwrap();
+                        println!("({}:{})", current_line.file, current_line.number);
+                    }
+                }
+            }
+            Status::Exited(exit_code) => {
+                println!("Child exited (status {})", exit_code);
+                self.inferior = None;
+            }
+            Status::Signaled(signal) => {
+                println!("Child terminated with signal {:?}", signal);
+                self.inferior = None;
             }
         }
     }

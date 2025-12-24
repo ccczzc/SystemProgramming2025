@@ -4,6 +4,7 @@ pub enum DebuggerCommand {
     Continue,
     Backtrace,
     BreakPoint(String),
+    Step(u64),
 }
 
 impl DebuggerCommand {
@@ -24,6 +25,18 @@ impl DebuggerCommand {
                     return None;
                 }
                 Some(DebuggerCommand::BreakPoint(tokens[1].to_string()))
+            }
+            "s" | "step" => {
+                let mut count: u64 = 1;
+                if tokens.len() >= 2 {
+                    if let Ok(c) = tokens[1].parse::<u64>() {
+                        count = c;
+                    } else {
+                        println!("Invalid step count: {}", tokens[1]);
+                        return None;
+                    }
+                }
+                Some(DebuggerCommand::Step(count))
             }
             // Default case:
             _ => None,
