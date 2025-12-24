@@ -1,10 +1,12 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
-use nix::sys::ptrace; // Add this import
+use nix::sys::ptrace;
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::Editor;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 pub struct Debugger {
     target: String,
@@ -268,6 +270,7 @@ impl Debugger {
                     } else {
                         let current_line = debug_current_line.unwrap();
                         println!("({}:{})", current_line.file, current_line.number);
+                        Debugger::print_source_line(&current_line.file, current_line.number);
                     }
                 }
             }
@@ -278,6 +281,16 @@ impl Debugger {
             Status::Signaled(signal) => {
                 println!("Child terminated with signal {:?}", signal);
                 self.inferior = None;
+            }
+        }
+    }
+
+    fn print_source_line(file_path: &str, line_number: u64) {
+        if let Ok(file) = File::open(file_path) {
+            let reader = BufReader::new(file);
+            // nth() is 0-indexed, line_number is 1-indexed
+            if let Some(Ok(line)) = reader.lines().nth((line_number - 1) as usize) {
+                println!("{}\t{}", line_number, line.trim());
             }
         }
     }
