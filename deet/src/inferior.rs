@@ -188,7 +188,9 @@ impl Inferior {
                 break;
             }
             let frame_top = base_ptr + 8;
-            instruction_ptr = ptrace::read(self.pid(), frame_top as ptrace::AddressType)? as u64;
+            // Read the return address and subtract 1 to point to the call instruction
+            // instead of the instruction after the call.
+            instruction_ptr = (ptrace::read(self.pid(), frame_top as ptrace::AddressType)? as u64).saturating_sub(1);
             base_ptr = ptrace::read(self.pid(), base_ptr as ptrace::AddressType)? as u64;
         }
         Ok(())
