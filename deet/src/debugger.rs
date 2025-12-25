@@ -1,5 +1,5 @@
 use crate::debugger_command::DebuggerCommand;
-use crate::dwarf_data::{DwarfData, Error as DwarfError};
+use crate::dwarf_data::{DwarfData, Error as DwarfError, Location}; // Import Location
 use crate::inferior::{Inferior, Status};
 use nix::sys::ptrace;
 use rustyline::error::ReadlineError;
@@ -197,6 +197,53 @@ impl Debugger {
                         eprintln!("Step failed: {}", e);
                     } else {
                         self.print_status(&status);
+                    }
+                }
+                DebuggerCommand::Print(var_name) => {
+                    if self.inferior.is_none() {
+                        println!("No inferior process running");
+                        continue;
+                    }
+                    let inferior = self.inferior.as_mut().unwrap();
+                    let pid = inferior.pid();
+                    let regs = ptrace::getregs(pid).unwrap();
+                    let rip = regs.rip;
+
+                    match self.debug_data.get_variable_at_addr(rip, &var_name) {
+                        Some(var) => {
+                            let addr = match var.location {
+                                Location::Address(a) => a,
+                                Location::FramePointerOffset(offset) => {
+                                    // DW_OP_fbreg is relative to the Frame Base (CFA).
+                                    // On x86_64, CFA is typically rbp + 16.
+                                    regs.rbp.wrapping_add(16).wrapping_add(offset as u64)
+                                }
+                            };
+
+                            // Read the value from memory
+                            match ptrace::read(pid, addr as ptrace::AddressType) {
+                                Ok(word) => {
+                                    // Mask based on size (assuming little endian)
+                                    let value = if var.entity_type.size <= 8 {
+                                        let mask = if var.entity_type.size == 8 {
+                                            0xFFFFFFFFFFFFFFFF
+                                        } else {
+                                            (1u64 << (var.entity_type.size * 8)) - 1
+                                        };
+                                        word as u64 & mask
+                                    } else {
+                                        word as u64
+                                    };
+                                    println!("{} = {}", var_name, value);
+                                }
+                                Err(e) => {
+                                    println!("ERROR reading variable memory: {}", e);
+                                }
+                            }
+                        }
+                        None => {
+                            println!("Variable '{}' not found in current context", var_name);
+                        }
                     }
                 }
             }

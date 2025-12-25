@@ -112,6 +112,24 @@ impl DwarfData {
     }
 
     #[allow(dead_code)]
+    pub fn get_variable_at_addr(&self, addr: u64, name: &str) -> Option<&Variable> {
+        for file in &self.files {
+            for func in &file.functions {
+                if addr >= func.address && addr < func.address + func.text_length {
+                    if let Some(var) = func.variables.iter().find(|v| v.name == name) {
+                        println!("Found variable {} ({} {}, located at {}, declared at line {}) in function {}", var.name, var.entity_type.name, var.entity_type.size, var.location, var.line_number, func.name);
+                        return Some(var);
+                    }
+                }
+            }
+            if let Some(var) = file.global_variables.iter().find(|v| v.name == name) {
+                return Some(var);
+            }
+        }
+        None
+    }
+
+    #[allow(dead_code)]
     pub fn print(&self) {
         for file in &self.files {
             println!("------");

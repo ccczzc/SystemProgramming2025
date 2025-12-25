@@ -5,6 +5,7 @@ pub enum DebuggerCommand {
     Backtrace,
     BreakPoint(String),
     Step(u64),
+    Print(String),
 }
 
 impl DebuggerCommand {
@@ -37,6 +38,13 @@ impl DebuggerCommand {
                     }
                 }
                 Some(DebuggerCommand::Step(count))
+            }
+            "p" | "print" => {
+                if tokens.len() < 2 {
+                    println!("No variable name given");
+                    return None;
+                }
+                Some(DebuggerCommand::Print(tokens[1].to_string()))
             }
             // Default case:
             _ => None,
