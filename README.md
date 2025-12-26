@@ -7,6 +7,8 @@
 
 ## Overview
 
+> **Note:** This project is designed for **Linux** only, as it relies on Linux-specific system calls like `ptrace`.
+
 DEET (Debugs Executables Extremely Terribly) is a lightweight, GDB-like debugger implemented in Rust. It allows users to inspect and control the execution of a target program using standard debugging features like breakpoints, stepping, and variable inspection.
 
 This project demonstrates core system programming concepts including:
