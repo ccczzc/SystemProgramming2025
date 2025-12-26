@@ -42,6 +42,12 @@ To build the debugger:
 cargo build
 ```
 
+To build the sample programs for debugging:
+
+```bash
+make
+```
+
 ### Running
 
 To run DEET on a target executable (e.g., `samples/segfault`):
